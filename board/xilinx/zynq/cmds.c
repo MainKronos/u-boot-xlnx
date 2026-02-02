@@ -39,6 +39,7 @@ DECLARE_GLOBAL_DATA_PTR;
 #define ZYNQ_RSA_MAGIC_WORD_SIZE		60
 #define ZYNQ_RSA_PART_OWNER_UBOOT		1
 #define ZYNQ_RSA_ALIGN_PPK_START		64
+#define ZYNQ_PARTITION_CHECKSUM_MASK		0x7000
 
 #define WORD_LENGTH_SHIFT	2
 
@@ -56,8 +57,8 @@ static struct zynq_rsa_public_key public_key;
 
 static struct partition_hdr part_hdr[ZYNQ_MAX_PARTITION_NUMBER];
 
-/* Global variable to store selected flash address */
-static u32 selected_flash_addr = 0;
+/* Global variable to store selected flash address for bootimg command */
+static u32 bootimg_selected_flash_addr = 0;
 
 /*
  * Extract the primary public key components from already autheticated FSBL
@@ -564,10 +565,10 @@ static int do_bootimg_select(struct cmd_tbl *cmdtp, int flag, int argc,
 
 	if (argc == 2) {
 		/* No flash address provided, show current selection */
-		if (selected_flash_addr == 0) {
+		if (bootimg_selected_flash_addr == 0) {
 			printf("No flash memory selected\n");
 		} else {
-			printf("Selected flash memory: 0x%08x\n", selected_flash_addr);
+			printf("Selected flash memory: 0x%08x\n", bootimg_selected_flash_addr);
 		}
 		return CMD_RET_SUCCESS;
 	}
@@ -576,13 +577,13 @@ static int do_bootimg_select(struct cmd_tbl *cmdtp, int flag, int argc,
 		return CMD_RET_USAGE;
 
 	/* Parse and store the flash address */
-	selected_flash_addr = hextoul(argv[2], &endp);
+	bootimg_selected_flash_addr = hextoul(argv[2], &endp);
 	if (*argv[2] == 0 || *endp != 0) {
 		printf("Error: Invalid flash address\n");
 		return CMD_RET_USAGE;
 	}
 
-	printf("Flash memory selected: 0x%08x\n", selected_flash_addr);
+	printf("Flash memory selected: 0x%08x\n", bootimg_selected_flash_addr);
 	return CMD_RET_SUCCESS;
 }
 
@@ -597,13 +598,13 @@ static int do_bootimg_show(struct cmd_tbl *cmdtp, int flag, int argc,
 	int i;
 	struct partition_hdr *hdr;
 
-	if (selected_flash_addr == 0) {
+	if (bootimg_selected_flash_addr == 0) {
 		printf("Error: No flash memory selected. Use 'bootimg select <flash>' first\n");
 		return CMD_RET_FAILURE;
 	}
 
 	/* Get partition information */
-	if (zynq_get_partition_info(selected_flash_addr, &fsbl_len, &part_hdr[0]) != 0) {
+	if (zynq_get_partition_info(bootimg_selected_flash_addr, &fsbl_len, &part_hdr[0]) != 0) {
 		printf("Error: Failed to get partition information\n");
 		return CMD_RET_FAILURE;
 	}
@@ -611,7 +612,7 @@ static int do_bootimg_show(struct cmd_tbl *cmdtp, int flag, int argc,
 	part_count = zynq_get_part_count(&part_hdr[0]);
 
 	printf("\n=== Boot Image Partitions ===\n");
-	printf("Flash Address: 0x%08x\n", selected_flash_addr);
+	printf("Flash Address: 0x%08x\n", bootimg_selected_flash_addr);
 	printf("FSBL Length: 0x%08x (%u bytes)\n", fsbl_len, fsbl_len);
 	printf("Partition Count: %d\n\n", part_count);
 
@@ -652,7 +653,7 @@ static int do_bootimg_check(struct cmd_tbl *cmdtp, int flag, int argc,
 	if (argc != 3)
 		return CMD_RET_USAGE;
 
-	if (selected_flash_addr == 0) {
+	if (bootimg_selected_flash_addr == 0) {
 		printf("Error: No flash memory selected. Use 'bootimg select <flash>' first\n");
 		return CMD_RET_FAILURE;
 	}
@@ -665,7 +666,7 @@ static int do_bootimg_check(struct cmd_tbl *cmdtp, int flag, int argc,
 	}
 
 	/* Get partition information */
-	if (zynq_get_partition_info(selected_flash_addr, &fsbl_len, &part_hdr[0]) != 0) {
+	if (zynq_get_partition_info(bootimg_selected_flash_addr, &fsbl_len, &part_hdr[0]) != 0) {
 		printf("Error: Failed to get partition information\n");
 		return CMD_RET_FAILURE;
 	}
@@ -690,15 +691,15 @@ static int do_bootimg_check(struct cmd_tbl *cmdtp, int flag, int argc,
 	printf("Partition header: OK\n");
 
 	/* Check if partition has checksum */
-	if (!(hdr->partitionattr & 0x7000)) {
+	if (!(hdr->partitionattr & ZYNQ_PARTITION_CHECKSUM_MASK)) {
 		printf("Warning: Partition does not have checksum enabled\n");
 		return CMD_RET_SUCCESS;
 	}
 
 	/* Calculate addresses for checksum validation */
-	part_addr = selected_flash_addr + (hdr->partitionstart << 2);
+	part_addr = bootimg_selected_flash_addr + (hdr->partitionstart << 2);
 	part_len = hdr->partitionwordlen << 2;
-	chksum_offset = selected_flash_addr + (hdr->checksumoffset << 2);
+	chksum_offset = bootimg_selected_flash_addr + (hdr->checksumoffset << 2);
 
 	printf("Partition start: 0x%08x\n", part_addr);
 	printf("Partition length: 0x%08x (%u bytes)\n", part_len, part_len);
@@ -718,9 +719,9 @@ static int do_bootimg_check(struct cmd_tbl *cmdtp, int flag, int argc,
 }
 
 static struct cmd_tbl bootimg_commands[] = {
-	U_BOOT_CMD_MKENT(select, 3, 1, do_bootimg_select, "", ""),
-	U_BOOT_CMD_MKENT(show, 2, 1, do_bootimg_show, "", ""),
-	U_BOOT_CMD_MKENT(check, 3, 1, do_bootimg_check, "", ""),
+	U_BOOT_CMD_MKENT(select, 3, 1, do_bootimg_select, "select flash", ""),
+	U_BOOT_CMD_MKENT(show, 2, 1, do_bootimg_show, "show partitions", ""),
+	U_BOOT_CMD_MKENT(check, 3, 1, do_bootimg_check, "check partition", ""),
 };
 
 static int do_bootimg(struct cmd_tbl *cmdtp, int flag, int argc,
